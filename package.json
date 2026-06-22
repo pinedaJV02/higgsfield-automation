@@ -1,0 +1,15 @@
+{
+  "name": "higgsfield-automation",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Unattended Playwright batch generator for higgsfield.ai (attaches to real Chrome via CDP).",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "scripts": {
+    "batch": "node src/index.js",
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}

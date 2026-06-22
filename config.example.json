@@ -1,0 +1,11 @@
+{
+  "model": "seedream_v4_5",
+  "ratio": "16:9",
+  "quality": "2K",
+  "unlimited": true,
+  "outputDir": "./output",
+  "timeoutMs": 180000,
+  "stepDelayMs": 4000,
+  "chromePort": 9222,
+  "chromePath": ""
+}
