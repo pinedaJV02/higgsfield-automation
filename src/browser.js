@@ -30,10 +30,28 @@ async function launchAndConnect(cfg) {
     ];
     const proc = spawn(chromePath, args, { detached: true, stdio: 'ignore' });
     proc.on('error', (e) => console.error(`Chrome spawn error: ${e.message}`));
+    // If Chrome exits almost immediately, it's almost always because another
+    // Chrome is already using this profile dir (it hands off and quits) — the
+    // debug port then never opens. Record it for a clear error message.
+    let earlyExit = null;
+    proc.on('exit', (code) => {
+      earlyExit = code;
+    });
     proc.unref(); // let Chrome outlive this Node process (keeps session warm)
     cfg._chromeProc = proc;
 
-    await waitForEndpoint(chromePort, 30000);
+    try {
+      await waitForEndpoint(chromePort, 30000);
+    } catch (err) {
+      if (earlyExit !== null) {
+        throw new Error(
+          `Chrome exited immediately (code ${earlyExit}) without opening its debug port. ` +
+            `Most likely another Chrome is already using the profile at "${chromeProfileDir}". ` +
+            `Close every Chrome window using that profile and re-run.`
+        );
+      }
+      throw err;
+    }
   } else {
     console.log(`  • attaching to Chrome already running on port ${chromePort}`);
   }

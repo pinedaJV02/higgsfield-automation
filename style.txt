@@ -1,0 +1,6 @@
+# Style suffix — appended to every prompt at runtime.
+# Lines starting with # are treated as comments and ignored.
+# Example:
+#   , cinematic lighting, 8k, hyperrealistic, shot on RED camera
+#
+# Leave the non-comment lines empty (or delete them) to disable the suffix.

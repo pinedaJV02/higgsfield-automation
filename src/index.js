@@ -1,9 +1,19 @@
 'use strict';
 
-const { loadConfig, loadPrompts } = require('./config');
+const fs = require('fs');
+const path = require('path');
+const {
+  loadConfig,
+  loadPrompts,
+  loadStyle,
+  loadSafety,
+  loadCharacters,
+  loadBaseCharacter,
+  DEFAULT_BASE_INSTRUCTION,
+} = require('./config');
 const { launchAndConnect } = require('./browser');
-const { Higgsfield, CaptchaError } = require('./higgsfield');
-const { sanitize } = require('./download');
+const { Higgsfield, CaptchaError, ModerationError, stampOf } = require('./higgsfield');
+const { sanitize, imageInfo } = require('./download');
 
 /** Timestamp in hhmmddMM (hour, minute, day, month). */
 function stamp() {
@@ -19,6 +29,37 @@ function slug(s) {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 40);
+}
+
+/** The `{noref}` token disables reference attachment for a prompt. */
+const NOREF_RE = /\{\s*noref\s*\}/i;
+
+/**
+ * Whether a term/phrase occurs as a whole word/phrase in the normalized prompt
+ * (which is space-padded), with simple plural/singular tolerance so e.g. "dog"
+ * matches "dogs" and "boxes" matches "box".
+ */
+function termInText(norm, term) {
+  if (!term) return false;
+  if (norm.includes(' ' + term + ' ')) return true;
+  if (norm.includes(' ' + term + 's ')) return true; // dog → dogs
+  if (term.endsWith('es') && norm.includes(' ' + term.slice(0, -2) + ' ')) return true; // boxes → box
+  if (term.endsWith('s') && norm.includes(' ' + term.slice(0, -1) + ' ')) return true; // dogs → dog
+  return false;
+}
+
+/**
+ * Choose which characters belong in a prompt automatically: a character matches
+ * if ANY of its match terms (filename keyword + `dog1`→"dog" + alias-file terms;
+ * see loadCharacters) appears in the prompt as a whole word/phrase. Returns the
+ * matching character objects.
+ */
+function matchCharacters(text, characters) {
+  const norm = ' ' + text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ') + ' ';
+  return characters.filter((c) => {
+    const terms = c.terms && c.terms.length ? c.terms : [c.keyword];
+    return terms.some((t) => termInText(norm, t));
+  });
 }
 
 /** Wait until logged in (prompt box visible), prompting the user if needed. */
@@ -41,6 +82,10 @@ async function ensureLoggedIn(hf, page) {
 async function main() {
   const cfg = loadConfig();
   const prompts = loadPrompts();
+  const style = loadStyle();
+  const safetyPreamble = loadSafety();
+  const characters = cfg.references ? loadCharacters(cfg.charactersDir) : [];
+  const base = cfg.useBaseImage ? loadBaseCharacter(cfg.baseCharacterDir) : null;
   if (prompts.length === 0) {
     console.log('No prompts found in prompts.txt. Add one prompt per line.');
     return;
@@ -48,12 +93,31 @@ async function main() {
 
   console.log('Higgsfield batch generator');
   console.log(`  prompts: ${prompts.length}  |  model=${cfg.model} ratio=${cfg.ratio} quality=${cfg.quality}`);
+  console.log(`  unlimited: ${cfg.unlimited ? 'ON (no credits)' : 'OFF (SPENDS CREDITS)'}`);
+  if (style) console.log(`  style suffix: "${style}"`);
+  if (characters.length) {
+    console.log(`  characters: ${characters.map((c) => c.keyword).join(', ')}`);
+  } else if (cfg.references) {
+    console.log(`  characters: (none in ${cfg.charactersDir})`);
+  }
+  if (cfg.useBaseImage) {
+    if (base && base.file) {
+      const custom = base.instruction !== DEFAULT_BASE_INSTRUCTION;
+      console.log(`  base image: ${path.basename(base.file)} (attached to every prompt)`);
+      console.log(`  base instruction: ${custom ? 'custom (instruction.txt)' : 'default'}`);
+    } else {
+      console.log(`  ⚠ base image: ENABLED but none found in ${cfg.baseCharacterDir}`);
+    }
+  }
   console.log(`  output: ${cfg.outputDir}\n`);
 
   const { browser, page } = await launchAndConnect(cfg);
   const hf = new Higgsfield(page, cfg);
 
-  const results = []; // { prompt, status, file }
+  // locked[keyword] = absolute path of the first generated image for that
+  // character; reused as its reference in later prompts (lock-first-generation).
+  const locked = {};
+  const results = []; // { label, prompt, baseName, status, file, stamp, prevStamp }
   let stoppedEarly = false;
 
   try {
@@ -61,52 +125,164 @@ async function main() {
     await ensureLoggedIn(hf, page);
     await hf.dismissCookies();
 
+    // Switch to the configured model + verify (Unlimited required only when ON).
+    await hf.selectModel();
+    await hf.verifyModelAndUnlimited();
+
     // Set ratio/quality once for the whole batch (no-op if already correct).
     await hf.setRatio(cfg.ratio);
     await hf.setQuality(cfg.quality);
 
     for (let i = 0; i < prompts.length; i++) {
-      const prompt = prompts[i];
+      const { timestamp } = prompts[i];
       const n = String(i + 1).padStart(2, '0');
-      console.log(`\n=== [${i + 1}/${prompts.length}] ${prompt} ===`);
+      const noref = NOREF_RE.test(prompts[i].text);
+      const prompt = prompts[i].text.replace(NOREF_RE, '').replace(/\s+/g, ' ').trim();
+      const label = timestamp || `#${n}`;
+      const baseName = timestamp ? timestamp.replace(/:/g, '_') : `${n}_${slug(prompt)}_${stamp()}`;
+      const rec = { label, prompt, baseName, status: 'pending', file: '', stamp: '', prevStamp: '' };
+      results.push(rec);
+      console.log(`\n=== [${i + 1}/${prompts.length}] [${label}] ${prompt} ===`);
 
       try {
         await hf.dismissCookies();
 
-        // CREDIT GUARD: must confirm Unlimited ON or we skip (never spend a credit).
-        try {
-          await hf.ensureUnlimitedOn();
-        } catch (guardErr) {
-          console.log(`  ! skipped: ${guardErr.message}`);
-          results.push({ prompt, status: 'skipped (Unlimited not ON)', file: '' });
-          continue;
+        // CREDIT GUARD (only when unlimited mode): confirm Unlimited ON or skip.
+        if (cfg.unlimited) {
+          try {
+            await hf.ensureUnlimitedOn();
+          } catch (guardErr) {
+            console.log(`  ! skipped: ${guardErr.message}`);
+            rec.status = 'skipped (Unlimited not ON)';
+            continue;
+          }
         }
 
-        await hf.setPrompt(prompt);
-        await hf.ensureUnlimitedOn(); // re-verify right before generating
+        // Build references: the base style image first (attached to EVERY prompt
+        // unless {noref}), then any matched character refs (lock-first-generation).
+        // The base is never locked and never keyword-matched. De-duped at the end.
+        const baseAttached = !!(base && base.file && !noref);
+        let refPaths = [];
+        if (baseAttached) refPaths.push(base.file);
+        if (cfg.references && !noref && characters.length) {
+          const matched = matchCharacters(prompt, characters);
+          rec.matched = matched.map((c) => c.keyword);
+          refPaths.push(...matched.map((c) => locked[c.keyword] || c.file));
+          if (matched.length) {
+            console.log(`  • references: ${matched.map((c) => c.keyword).join(', ')}`);
+          }
+        }
+        refPaths = [...new Set(refPaths)];
+        await hf.clearReferences();
+        await hf.attachReferences(refPaths);
 
-        const prevSrc = await hf.getFirstResult();
-        await hf.generate();
+        // Prompt text = prompt + style suffix + base instruction (only when the
+        // base image was actually attached, so the wording never references an
+        // image that isn't there).
+        const parts = [prompt];
+        if (style) parts.push(style);
+        if (baseAttached) parts.push(base.instruction);
+        const fullPrompt = parts.join(' ').replace(/\s+/g, ' ').trim();
+        await hf.setPrompt(fullPrompt);
+        if (cfg.unlimited) await hf.ensureUnlimitedOn(); // re-verify before generating
 
-        if (await hf.isCaptcha()) throw new CaptchaError();
+        // Wait for the references to finish uploading before generating, so we
+        // never fire against a half-uploaded image. Generate anyway (with a warn)
+        // if completion can't be confirmed in time, rather than blocking the batch.
+        if (refPaths.length) {
+          const ready = await hf.waitForUploadsComplete(refPaths.length);
+          if (!ready) {
+            console.log('  ⚠ uploads not confirmed complete within window — generating anyway');
+          }
+        }
 
-        await hf.waitForResult(prevSrc);
+        // Baseline of any moderation-matching text already on the page (e.g. an
+        // "NSFW" filter label, the prompt itself) captured BEFORE generating, so a
+        // real rejection is recognized only as text that appears AFTER Generate.
+        const modBaseline = await hf.moderationPhrases();
 
-        const baseName = `${n}_${slug(prompt)}_${stamp()}`;
-        const file = await hf.downloadNewest(cfg.outputDir, baseName);
+        // Generate, waiting for the result. If it's rejected as NSFW/content-
+        // policy, retry ONCE with the safety preamble prepended; a second
+        // rejection (or any other error) propagates to the catch below.
+        let newSrc = null;
+        for (let attempt = 0; ; attempt++) {
+          if (attempt > 0) {
+            console.log(`  • rejected — retrying with safety preamble (attempt ${attempt + 1})`);
+            await hf.waitForModerationClear(modBaseline); // let the stale rejection clear
+            await hf.setPrompt(`${safetyPreamble} ${fullPrompt}`.replace(/\s+/g, ' ').trim());
+            if (cfg.unlimited) await hf.ensureUnlimitedOn();
+          }
+          const prevSrc = await hf.getFirstResult();
+          rec.prevStamp = stampOf(prevSrc) || '';
+          await hf.generate();
+          if (await hf.isCaptcha()) throw new CaptchaError();
+          try {
+            newSrc = await hf.waitForResult(prevSrc, { moderationBaseline: modBaseline });
+            break;
+          } catch (genErr) {
+            if (genErr instanceof ModerationError && attempt < 1) continue; // retry once
+            throw genErr;
+          }
+        }
+        rec.stamp = stampOf(newSrc) || '';
+
+        const file = await hf.downloadNewest(cfg.outputDir, baseName, newSrc);
         console.log(`  • saved ${file}`);
-        results.push({ prompt, status: 'ok', file });
+        rec.status = 'ok';
+        rec.file = file;
+
+        // Lock the first generation of each newly-seen character.
+        for (const kw of rec.matched || []) {
+          if (!locked[kw]) {
+            locked[kw] = file;
+            console.log(`  • locked character "${kw}" → ${path.basename(file)}`);
+          }
+        }
 
         await hf._humanPause(cfg.stepDelayMs, cfg.stepDelayMs + 2000);
       } catch (err) {
         if (err instanceof CaptchaError) {
           console.error('\n!!! CAPTCHA appeared — stopping the batch (cannot auto-solve).');
-          results.push({ prompt, status: 'CAPTCHA — not generated', file: '' });
+          rec.status = 'CAPTCHA — not generated';
           stoppedEarly = true;
           break;
         }
-        console.error(`  ! error: ${err.message}`);
-        results.push({ prompt, status: `error: ${err.message}`, file: '' });
+        if (err instanceof ModerationError) {
+          console.error(`  ! rejected (NSFW/moderation): ${err.message}`);
+          rec.status = 'rejected (NSFW/moderation)';
+        } else if (/Timed out/i.test(err.message)) {
+          console.error(`  ! timeout: ${err.message}`);
+          rec.status = 'timeout';
+        } else {
+          console.error(`  ! error: ${err.message}`);
+          rec.status = `error: ${err.message}`;
+        }
+      }
+    }
+
+    // --- recover timed-out prompts whose images finished after we gave up ---
+    const timeouts = results.filter((r) => r.status === 'timeout');
+    if (timeouts.length && !stoppedEarly) {
+      console.log(`\n--- Rescanning feed for ${timeouts.length} timed-out prompt(s) ---`);
+      await hf._scrollResultsTop().catch(() => {});
+      const feed = await hf.listResults(); // [{src,stamp}] oldest→newest
+      const claimed = new Set(results.filter((r) => r.stamp).map((r) => r.stamp));
+      for (const r of timeouts) {
+        const cand = feed.find((f) => f.stamp > (r.prevStamp || '') && !claimed.has(f.stamp));
+        if (!cand) {
+          console.log(`  • no missed result found for [${r.label}]`);
+          continue;
+        }
+        try {
+          const file = await hf.downloadNewest(cfg.outputDir, r.baseName, cand.src);
+          claimed.add(cand.stamp);
+          r.status = 'ok (recovered)';
+          r.file = file;
+          r.stamp = cand.stamp;
+          console.log(`  • recovered [${r.label}] → ${file}`);
+        } catch (e) {
+          console.log(`  ! recover failed for [${r.label}]: ${e.message}`);
+        }
       }
     }
   } finally {
@@ -116,19 +292,49 @@ async function main() {
 
   // --- summary ---
   console.log('\n================= SUMMARY =================');
-  results.forEach((r, i) => {
-    const tag = r.status === 'ok' ? 'OK ' : '!! ';
-    console.log(`${tag}[${i + 1}] ${r.prompt}`);
-    console.log(`      ${r.status === 'ok' ? r.file : r.status}`);
+  results.forEach((r) => {
+    const ok = r.status.startsWith('ok');
+    console.log(`${ok ? 'OK ' : '!! '}[${r.label}] ${r.prompt.slice(0, 60)}`);
+    console.log(`      ${ok ? r.file : r.status}`);
   });
-  const done = results.filter((r) => r.status === 'ok').length;
+  const done = results.filter((r) => r.status.startsWith('ok')).length;
   const remaining = prompts.slice(results.length);
   console.log(`\n${done}/${prompts.length} saved to ${cfg.outputDir}`);
   if (stoppedEarly && remaining.length) {
     console.log(`Stopped early. Remaining ${remaining.length} prompt(s):`);
-    remaining.forEach((p) => console.log(`  - ${p}`));
+    remaining.forEach((p) => console.log(`  - ${p.timestamp ? '[' + p.timestamp + '] ' : ''}${p.text}`));
     console.log('Re-run after solving the verification to continue.');
   }
+
+  // --- file-level fulfillment check ---
+  console.log('\n================= FULFILLMENT =================');
+  let flagged = 0;
+  for (const r of results) {
+    if (r.status.startsWith('ok') && r.file && fs.existsSync(r.file)) {
+      const info = imageInfo(r.file);
+      const longSide = Math.max(info.width, info.height);
+      const good = info.ok && longSide >= 1000 && info.bytes >= 50 * 1024;
+      if (good) {
+        console.log(`  ✓ [${r.label}] ${path.basename(r.file)} ${info.width}x${info.height}`);
+      } else {
+        flagged++;
+        const why = !info.ok
+          ? 'unreadable image'
+          : longSide < 1000
+            ? `too small (${info.width}x${info.height})`
+            : `tiny file (${info.bytes} bytes)`;
+        console.log(`  ⚠ FLAGGED [${r.label}] ${path.basename(r.file)} — ${why}`);
+      }
+    } else {
+      flagged++;
+      console.log(`  ⚠ FLAGGED [${r.label}] not fulfilled — ${r.status}`);
+    }
+  }
+  console.log(
+    flagged === 0
+      ? `All ${results.length} prompt(s) fulfilled. ✓`
+      : `${flagged} prompt(s) FLAGGED — review above.`
+  );
   console.log('==========================================');
 }
 

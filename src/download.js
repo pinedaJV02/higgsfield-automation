@@ -90,4 +90,51 @@ async function saveDownload(download, opts) {
   return finalPath;
 }
 
-module.exports = { downloadImage, saveDownload, sanitize };
+/**
+ * Read basic info from a saved image file for the file-level fulfillment check:
+ * whether it's a readable PNG/JPEG/WEBP, its pixel dimensions, and byte size.
+ * @returns {{ ok: boolean, bytes: number, width: number, height: number }}
+ */
+function imageInfo(filePath) {
+  try {
+    const buf = fs.readFileSync(filePath);
+    const bytes = buf.length;
+    let width = 0;
+    let height = 0;
+    if (buf.length > 24 && buf.toString('ascii', 1, 4) === 'PNG') {
+      width = buf.readUInt32BE(16);
+      height = buf.readUInt32BE(20);
+    } else if (buf[0] === 0xff && buf[1] === 0xd8) {
+      let o = 2;
+      while (o < buf.length) {
+        if (buf[o] !== 0xff) break;
+        const marker = buf[o + 1];
+        const len = buf.readUInt16BE(o + 2);
+        if (marker >= 0xc0 && marker <= 0xc3) {
+          height = buf.readUInt16BE(o + 5);
+          width = buf.readUInt16BE(o + 7);
+          break;
+        }
+        o += 2 + len;
+      }
+    } else if (buf.length > 30 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') {
+      const fmt = buf.toString('ascii', 12, 16);
+      if (fmt === 'VP8X') {
+        width = 1 + (buf[24] | (buf[25] << 8) | (buf[26] << 16));
+        height = 1 + (buf[27] | (buf[28] << 8) | (buf[29] << 16));
+      } else if (fmt === 'VP8 ') {
+        width = buf.readUInt16LE(26) & 0x3fff;
+        height = buf.readUInt16LE(28) & 0x3fff;
+      } else if (fmt === 'VP8L') {
+        const b = buf.readUInt32LE(21);
+        width = 1 + (b & 0x3fff);
+        height = 1 + ((b >> 14) & 0x3fff);
+      }
+    }
+    return { ok: width > 0 && height > 0, bytes, width, height };
+  } catch {
+    return { ok: false, bytes: 0, width: 0, height: 0 };
+  }
+}
+
+module.exports = { downloadImage, saveDownload, sanitize, imageInfo };

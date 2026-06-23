@@ -7,7 +7,8 @@
   "main": "src/index.js",
   "scripts": {
     "batch": "node src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "ui": "node src/server.js"
   },
   "dependencies": {
     "playwright": "^1.49.0"

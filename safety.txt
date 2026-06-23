@@ -1,0 +1,5 @@
+# Safety preamble — prepended to a prompt ONLY when a generation is rejected as
+# NSFW / content-policy and is automatically retried once. Edit freely.
+# Lines starting with '#' and blank lines are ignored. Delete the text below to
+# fall back to the built-in default.
+Non-graphic educational doodle illustration. No gore, blood, injury detail, nudity, or violence — symbolic hand-drawn stick-figure style only.

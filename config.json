@@ -1,11 +1,17 @@
 {
   "model": "seedream_v4_5",
+  "modelLabel": "",
   "ratio": "16:9",
   "quality": "2K",
-  "unlimited": true,
+  "unlimited": false,
+  "references": true,
+  "charactersDir": "./characters",
+  "useBaseImage": true,
+  "baseCharacterDir": "./base_character",
   "outputDir": "./output",
-  "timeoutMs": 180000,
+  "timeoutMs": 300000,
   "stepDelayMs": 4000,
   "chromePort": 9222,
-  "chromePath": ""
+  "chromePath": "",
+  "uiPort": 5179
 }
