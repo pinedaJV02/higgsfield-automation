@@ -20,7 +20,9 @@ const {
   validateConfig,
   loadPrompts,
   loadCharacters,
+  loadBackgrounds,
   loadBaseCharacter,
+  detectClaude,
   DEFAULT_BASE_INSTRUCTION,
   DEFAULTS,
   PROJECT_ROOT,
@@ -28,6 +30,7 @@ const {
   PROMPTS_PATH,
 } = require('./config');
 const { imageInfo, sanitize } = require('./download');
+const { runPlan, PLAN_MD } = require('./planner');
 
 const UI_DIR = path.join(PROJECT_ROOT, 'ui');
 const IMG_RE = /\.(png|jpe?g|webp|gif)$/i;
@@ -69,6 +72,12 @@ function outputDir() {
 
 function baseDir() {
   const dir = resolveDir(readConfig().baseCharacterDir);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function backgroundsDir() {
+  const dir = resolveDir(readConfig().backgroundsDir);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -391,6 +400,88 @@ function handleDeleteCharacter(res, name) {
   sendJson(res, 200, { ok: true });
 }
 
+// --- backgrounds (same convention as characters: keyword/alias matched) ---
+
+function handleGetBackgrounds(res) {
+  const bgs = loadBackgrounds(backgroundsDir()).map((c) => ({
+    keyword: c.keyword,
+    name: path.basename(c.file),
+    url: `/backgrounds/${encodeURIComponent(path.basename(c.file))}`,
+    description: c.description || '',
+    terms: c.terms || [],
+  }));
+  sendJson(res, 200, { backgrounds: bgs });
+}
+
+async function handlePostBackground(req, res) {
+  let body;
+  try {
+    body = JSON.parse((await readBody(req)).toString() || '{}');
+  } catch (e) {
+    sendJson(res, 400, { error: `Invalid JSON: ${e.message}` });
+    return;
+  }
+  const safe = safeName(sanitize(body.name || ''));
+  if (!safe || !IMG_RE.test(safe)) {
+    sendJson(res, 400, { error: 'Name must be a .png/.jpg/.jpeg/.webp/.gif file.' });
+    return;
+  }
+  const data = String(body.dataBase64 || '').replace(/^data:[^,]*,/, '');
+  if (!data) {
+    sendJson(res, 400, { error: 'Missing image data.' });
+    return;
+  }
+  try {
+    fs.writeFileSync(path.join(backgroundsDir(), safe), Buffer.from(data, 'base64'));
+  } catch (e) {
+    sendJson(res, 500, { error: `Could not save image: ${e.message}` });
+    return;
+  }
+  sendJson(res, 200, { ok: true, name: safe });
+}
+
+async function handlePostBackgroundDescription(req, res) {
+  let body;
+  try {
+    body = JSON.parse((await readBody(req)).toString() || '{}');
+  } catch (e) {
+    sendJson(res, 400, { error: `Invalid JSON: ${e.message}` });
+    return;
+  }
+  const safe = safeName(body.name || '');
+  if (!safe || !IMG_RE.test(safe)) {
+    sendJson(res, 400, { error: 'Bad background name.' });
+    return;
+  }
+  const txtPath = path.join(backgroundsDir(), safe.replace(IMG_RE, '.txt'));
+  const text = typeof body.text === 'string' ? body.text.trim() : '';
+  try {
+    if (text) fs.writeFileSync(txtPath, text + '\n');
+    else if (fs.existsSync(txtPath)) fs.unlinkSync(txtPath);
+  } catch (e) {
+    sendJson(res, 500, { error: `Could not save aliases: ${e.message}` });
+    return;
+  }
+  sendJson(res, 200, { ok: true });
+}
+
+function handleDeleteBackground(res, name) {
+  const safe = safeName(name);
+  if (!safe || !IMG_RE.test(safe)) {
+    sendJson(res, 400, { error: 'Bad name' });
+    return;
+  }
+  try {
+    fs.unlinkSync(path.join(backgroundsDir(), safe));
+    const txt = path.join(backgroundsDir(), safe.replace(IMG_RE, '.txt'));
+    if (fs.existsSync(txt)) fs.unlinkSync(txt);
+  } catch (e) {
+    sendJson(res, 500, { error: `Could not delete: ${e.message}` });
+    return;
+  }
+  sendJson(res, 200, { ok: true });
+}
+
 // --- base style image (global reference attached to every prompt) ---
 
 function handleGetBase(res) {
@@ -457,6 +548,40 @@ async function handlePostBaseInstruction(req, res) {
     return;
   }
   sendJson(res, 200, { ok: true });
+}
+
+// --- AI plan (Claude CLI): cast + 5-6 background scenes + per-prompt characters ---
+
+function handleGetPlan(res) {
+  try {
+    const md = fs.existsSync(PLAN_MD) ? fs.readFileSync(PLAN_MD, 'utf8') : '';
+    sendJson(res, 200, { exists: !!md, markdown: md });
+  } catch (e) {
+    sendJson(res, 500, { error: e.message });
+  }
+}
+
+async function handlePostPlan(res) {
+  let prompts;
+  try {
+    prompts = loadPrompts();
+  } catch (e) {
+    sendJson(res, 400, { error: `Add prompts first: ${e.message}` });
+    return;
+  }
+  const cfg = readConfig();
+  if (!cfg.claudeCommand) cfg.claudeCommand = detectClaude();
+  const characters = loadCharacters(charactersDir());
+  try {
+    const plan = await runPlan(cfg, prompts, characters);
+    if (!plan) {
+      sendJson(res, 200, { ok: false, error: 'Planning failed or Claude CLI not found — check the server window.' });
+      return;
+    }
+    sendJson(res, 200, { ok: true, missing: plan.missing || [] });
+  } catch (e) {
+    sendJson(res, 500, { error: e.message });
+  }
 }
 
 function handleGetOutput(res) {
@@ -551,12 +676,22 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/characters' && method === 'DELETE')
       return handleDeleteCharacter(res, url.searchParams.get('name'));
 
+    if (pathname === '/api/backgrounds' && method === 'GET') return handleGetBackgrounds(res);
+    if (pathname === '/api/backgrounds' && method === 'POST') return await handlePostBackground(req, res);
+    if (pathname === '/api/backgrounds/description' && method === 'POST')
+      return await handlePostBackgroundDescription(req, res);
+    if (pathname === '/api/backgrounds' && method === 'DELETE')
+      return handleDeleteBackground(res, url.searchParams.get('name'));
+
     if (pathname === '/api/base' && method === 'GET') return handleGetBase(res);
     if (pathname === '/api/base/image' && method === 'POST') return await handlePostBaseImage(req, res);
     if (pathname === '/api/base/instruction' && method === 'POST')
       return await handlePostBaseInstruction(req, res);
 
     if (pathname === '/api/output' && method === 'GET') return handleGetOutput(res);
+
+    if (pathname === '/api/plan' && method === 'GET') return handleGetPlan(res);
+    if (pathname === '/api/plan' && method === 'POST') return await handlePostPlan(res);
 
     if (pathname === '/api/run' && method === 'POST') {
       const r = startRun();
@@ -571,6 +706,8 @@ const server = http.createServer(async (req, res) => {
     // --- static image dirs ---
     if (pathname.startsWith('/characters/') && method === 'GET')
       return serveFromDir(res, charactersDir(), decodeURIComponent(pathname.slice('/characters/'.length)));
+    if (pathname.startsWith('/backgrounds/') && method === 'GET')
+      return serveFromDir(res, backgroundsDir(), decodeURIComponent(pathname.slice('/backgrounds/'.length)));
     if (pathname.startsWith('/output/') && method === 'GET')
       return serveFromDir(res, outputDir(), decodeURIComponent(pathname.slice('/output/'.length)));
     if (pathname.startsWith('/base/') && method === 'GET')

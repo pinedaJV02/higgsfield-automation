@@ -59,26 +59,52 @@ When it finishes it: **rescans for any timed-out prompts** whose images finished
 them, then runs a **fulfillment check** that flags any prompt whose image is missing or invalid.
 
 ## Character references & consistency (`characters/`)
-Drop reference images in **`characters/`** and the tool **automatically attaches the right ones to
-each prompt**: a character is matched when its **name or an alias** appears in the prompt. Matching
-uses the filename (`dog.png` → `dog`), the filename with a trailing number removed (`Dog1.png` also
-matches "dog"), and an optional **alias file** — a same-named `.txt` (`Dog1.txt` = `dog, puppy, brown
-dog`) you can edit right in the control panel (**Characters** tab → the *aliases* box under each
-image). The **first generated image of a character is locked** and reused for every later prompt, so
-characters stay consistent across frames — even ones with no starter file. Add `{noref}` to a prompt
-to skip references for it, or set `"references": false` to disable the feature. See
-`characters/README.md`.
+Drop reference images in **`characters/`**. The tool picks which to attach to each prompt in this
+order:
+1. **`[reference: FILENAME.PNG]` tags** in the prompt (and the `[main character]` tag) — written by
+   the master prompt. These are authoritative: the named images are attached exactly, and the tags
+   are stripped from the text before typing. A referenced image that isn't in `characters/` is
+   reported so you know what to add.
+2. Otherwise, **automatic matching** by name or alias: the filename (`dog.png` → `dog`), the filename
+   with a trailing number removed (`Dog1.png` also matches "dog"), and an optional **alias file** — a
+   same-named `.txt` (`Dog1.txt` = `dog, puppy, brown dog`) editable in the control panel
+   (**Characters** tab → the *aliases* box), plus role cues (a rescue scene pulls the rescuer, an
+   explanation pulls the main character, etc.).
 
-## Base style image (`base_character/`)
-Unlike per-character references (which are keyword-matched), the **base style image** in
-**`base_character/`** is **always on** — it's attached as a reference to **every** prompt so all
-images share one art style, and it acts as the template for any new character (reuse the base figure,
-change only a minor feature or the outfit). An editable **instruction** expresses the same intent in
-words and is appended to each prompt's text whenever the base image is attached. Manage both from the
-control panel's **Base style** tab: the current image (uploading a new one **replaces** it) and the
-instruction textarea (blank = built-in default, stored as `instruction.txt`). The base is never
-locked and never keyword-matched. Add `{noref}` to a prompt to skip it (image and instruction) for
-that prompt, or turn the whole feature off with `"useBaseImage": false`.
+The **first generated image of a matched character is locked** and reused for later prompts, so
+characters stay consistent. Add `{noref}` to skip references for a prompt, or `"references": false`
+to disable matching. See `characters/README.md`.
+
+## Background references (`backgrounds/`)
+Works exactly like `characters/`, but for **scene backgrounds**. Drop images in
+**`backgrounds/`** and a prompt automatically pulls in any background whose **name or alias**
+matches (filename → keyword, trailing number stripped, plus an optional same-named `.txt`
+alias file editable on the **Backgrounds** tab). For example `sunset.png` with aliases
+`orange, fire, ancient` attaches to a fiery/ancient scene. **At most one** background is
+attached per prompt. Turn it off with `"backgrounds": false`. See `backgrounds/README.md`.
+
+## Base style image (`base_character/`) — fallback only
+The **base style image** in **`base_character/`** is the doodle-style anchor used **only when a prompt
+has no character and no background** (no `[reference:]` tag and no match). The moment a real character is present,
+the base figure is dropped — so a scene with the main character or the rescuer won't also carry the
+base guy. An editable **instruction** is appended to the prompt only when the base image is actually
+attached. Manage both from the control panel's **Base style** tab (uploading a new image **replaces**
+it; blank instruction = built-in default, stored as `instruction.txt`). Add `{noref}` to skip it, or
+`"useBaseImage": false` to disable.
+
+## Master prompt + planning (Claude)
+The image prompts themselves are produced upstream by the **master prompt** in
+`Project_start/updated_master_prompt_v5.txt` — a staged workflow you run in a Claude/ChatGPT chat that
+turns a script into per-timestamp prompts, chooses the character per scene, emits the `[reference:]`
+tags above, plans 5–6 recurring background scenes, and (v5) keeps generated images **free of on-screen
+text/words**.
+
+Inside the tool, **AI planning** is an optional helper: with `"aiPlanning": true` it calls your
+already-installed **Claude Code CLI** (auto-detected; no API key) once at the start of a run to draft
+the cast, the 5–6 background scenes, and a per-prompt character list into **`plan.md`** (+ `plan.json`),
+and uses that to choose characters for any prompt that has no `[reference:]` tag. It degrades to the
+keyword/role heuristic if the CLI isn't found. Generate or view the plan anytime from the **Run** tab's
+*Plan with Claude* button.
 
 ## Prompts (`prompts.txt`)
 Paste a timestamped script directly — `[MM:SS]` (or `[HH:MM:SS]`) markers split it into prompts, and
@@ -123,6 +149,11 @@ blood, injury detail, nudity, or violence — symbolic hand-drawn stick-figure s
 | `chromePort` | Chrome remote-debugging port | `9222` |
 | `chromePath` | Chrome exe (auto-detected if empty) | `""` |
 | `uiPort` | Port for the `open-ui.bat` control panel | `5179` |
+| `backgrounds` | Attach a matching `backgrounds/` image per prompt | `true` |
+| `backgroundsDir` | Folder of background/scene reference images | `./backgrounds` |
+| `aiPlanning` | Use the Claude Code CLI to plan cast/scenes + per-prompt characters | `true` |
+| `claudeCommand` | Path to `claude.exe` (auto-detected if empty) | `""` |
+| `claudeModel` | Model the planner uses | `claude-haiku-4-5` |
 
 ## How it works (for maintainers)
 - `src/browser.js` — launches a **normal** Chrome with `--remote-debugging-port` and a

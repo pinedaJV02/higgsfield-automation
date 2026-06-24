@@ -137,6 +137,7 @@
   <button data-tab="config" class="active">Config</button>
   <button data-tab="prompts">Prompts</button>
   <button data-tab="characters">Characters</button>
+  <button data-tab="backgrounds">Backgrounds</button>
   <button data-tab="base">Base style</button>
   <button data-tab="run">Run</button>
   <button data-tab="output">Output</button>
@@ -171,6 +172,15 @@
     <div class="dropzone" id="dropzone">Drag images here, or click to choose files</div>
     <input type="file" id="fileInput" accept=".png,.jpg,.jpeg,.webp,.gif" multiple hidden />
     <div class="charGrid" id="charGrid"></div>
+  </section>
+
+  <!-- BACKGROUNDS -->
+  <section id="backgrounds">
+    <h2>Background references</h2>
+    <p class="hint">Works exactly like characters: a prompt pulls in any background whose name or aliases appear in it (e.g. <code>sunset.png</code> + aliases <code>orange, fire, ancient</code> matches a fiery/ancient scene). At most one background is attached per prompt. When a prompt matches no character and no background, the base style image is used instead.</p>
+    <div class="dropzone" id="bgDropzone">Drag images here, or click to choose files</div>
+    <input type="file" id="bgFileInput" accept=".png,.jpg,.jpeg,.webp,.gif" multiple hidden />
+    <div class="charGrid" id="bgGrid"></div>
   </section>
 
   <!-- BASE STYLE -->
@@ -208,6 +218,14 @@
       <button class="btn secondary" id="clearLog">Clear log</button>
     </div>
     <div id="log"></div>
+
+    <h2 style="margin-top:28px">Plan with Claude</h2>
+    <p class="hint">Optional. Uses the Claude Code CLI to draft the cast, 5-6 background scenes, and a per-prompt character list into <code>plan.md</code>. Turn it on/off with <code>aiPlanning</code> on the Config tab.</p>
+    <div class="row">
+      <button class="btn secondary" id="planBtn">Generate plan (Claude)</button>
+      <button class="btn secondary" id="reloadPlan">Reload plan</button>
+    </div>
+    <pre id="planView" style="background:#0a0c10;border:1px solid var(--border);border-radius:10px;padding:12px;max-height:320px;overflow:auto;white-space:pre-wrap;margin-top:12px;font-size:12.5px"></pre>
   </section>
 
   <!-- OUTPUT -->
@@ -247,7 +265,9 @@ document.querySelectorAll('nav button').forEach((b) => {
     $('#' + b.dataset.tab).classList.add('active');
     if (b.dataset.tab === 'output') loadOutput();
     if (b.dataset.tab === 'characters') loadCharacters();
+    if (b.dataset.tab === 'backgrounds') loadBackgrounds();
     if (b.dataset.tab === 'base') loadBase();
+    if (b.dataset.tab === 'run') loadPlan();
   };
 });
 
@@ -262,6 +282,8 @@ const FIELD_META = {
   charactersDir: { label: 'Characters folder', desc: 'Path to reference images.' },
   useBaseImage: { label: 'Use base image', desc: 'Attach the base style image + instruction to every prompt (see Base style tab).' },
   baseCharacterDir: { label: 'Base image folder', desc: 'Folder holding the base style image.' },
+  backgrounds: { label: 'Use backgrounds', desc: 'Attach a matching backgrounds/ image per prompt (see Backgrounds tab).' },
+  backgroundsDir: { label: 'Backgrounds folder', desc: 'Folder of background/scene reference images.' },
   outputDir: { label: 'Output folder', desc: 'Where images are saved.' },
   timeoutMs: { label: 'Timeout per image (ms)', desc: 'Max wait per generation.' },
   stepDelayMs: { label: 'Delay between prompts (ms)', desc: 'Human-like pacing.' },
@@ -382,6 +404,59 @@ const dz = $('#dropzone');
 ['dragleave', 'drop'].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove('drag'); }));
 dz.addEventListener('drop', (e) => uploadFiles(e.dataTransfer.files));
 
+// --- backgrounds (mirror of characters) ---
+async function loadBackgrounds() {
+  const { backgrounds } = await api('/api/backgrounds');
+  const grid = $('#bgGrid');
+  grid.innerHTML = '';
+  if (!backgrounds.length) { grid.innerHTML = '<p class="hint">No background images yet.</p>'; return; }
+  for (const c of backgrounds) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const esc = (s) => String(s).replace(/"/g, '&quot;');
+    card.innerHTML = `<img src="${c.url}" alt="${c.name}"/>
+      <button class="del" title="Delete">×</button>
+      <div class="meta"><div class="kw">${c.keyword}</div><div class="dim">${c.name}</div>
+        <input class="alias" type="text" placeholder="aliases: sunset, orange, fire…" value="${esc(c.description || '')}" />
+      </div>`;
+    card.querySelector('.del').onclick = async () => {
+      try { await api('/api/backgrounds?name=' + encodeURIComponent(c.name), { method: 'DELETE' }); loadBackgrounds(); toast('Deleted', 'ok'); }
+      catch (e) { toast(e.message, 'err'); }
+    };
+    const alias = card.querySelector('.alias');
+    const saveAlias = async () => {
+      if (alias.value === (c.description || '')) return;
+      try {
+        await api('/api/backgrounds/description', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: c.name, text: alias.value }) });
+        c.description = alias.value;
+        toast('Aliases saved for ' + c.keyword, 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    alias.onblur = saveAlias;
+    alias.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); alias.blur(); } };
+    grid.appendChild(card);
+  }
+}
+function uploadBackgrounds(files) {
+  [...files].forEach((file) => {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        await api('/api/backgrounds', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: file.name, dataBase64: reader.result }) });
+        loadBackgrounds();
+        toast('Uploaded ' + file.name, 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    reader.readAsDataURL(file);
+  });
+}
+$('#bgDropzone').onclick = () => $('#bgFileInput').click();
+$('#bgFileInput').onchange = (e) => uploadBackgrounds(e.target.files);
+const bdz = $('#bgDropzone');
+['dragover', 'dragenter'].forEach((ev) => bdz.addEventListener(ev, (e) => { e.preventDefault(); bdz.classList.add('drag'); }));
+['dragleave', 'drop'].forEach((ev) => bdz.addEventListener(ev, (e) => { e.preventDefault(); bdz.classList.remove('drag'); }));
+bdz.addEventListener('drop', (e) => uploadBackgrounds(e.dataTransfer.files));
+
 // --- base style image ---
 let baseDefaultInstruction = '';
 async function loadBase() {
@@ -465,6 +540,25 @@ $('#stopBtn').onclick = async () => {
 };
 $('#clearLog').onclick = () => ($('#log').innerHTML = '');
 
+// --- plan (Claude) ---
+async function loadPlan() {
+  try {
+    const { exists, markdown } = await api('/api/plan');
+    $('#planView').textContent = exists ? markdown : 'No plan yet. Click "Generate plan (Claude)".';
+  } catch (e) { $('#planView').textContent = e.message; }
+}
+$('#planBtn').onclick = async () => {
+  const btn = $('#planBtn');
+  btn.disabled = true; btn.textContent = 'Planning… (this can take ~30s)';
+  try {
+    const r = await api('/api/plan', { method: 'POST' });
+    if (r.ok) { toast('Plan written to plan.md', 'ok'); await loadPlan(); }
+    else { toast(r.error || 'Planning failed', 'err'); }
+  } catch (e) { toast(e.message, 'err'); }
+  finally { btn.disabled = false; btn.textContent = 'Generate plan (Claude)'; }
+};
+$('#reloadPlan').onclick = () => loadPlan();
+
 // --- output ---
 async function loadOutput() {
   const { images } = await api('/api/output');
@@ -489,6 +583,8 @@ $('#reloadOutput').onclick = () => loadOutput().then(() => toast('Refreshed'));
 loadConfig();
 loadPrompts();
 loadCharacters();
+loadBackgrounds();
+loadPlan();
 connectStream();
 </script>
 </body>

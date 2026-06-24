@@ -8,10 +8,15 @@
   "charactersDir": "./characters",
   "useBaseImage": true,
   "baseCharacterDir": "./base_character",
+  "backgrounds": true,
+  "backgroundsDir": "./backgrounds",
   "outputDir": "./output",
-  "timeoutMs": 300000,
+  "timeoutMs": 600000,
   "stepDelayMs": 4000,
   "chromePort": 9222,
   "chromePath": "",
-  "uiPort": 5179
+  "uiPort": 5179,
+  "aiPlanning": true,
+  "claudeCommand": "",
+  "claudeModel": "claude-haiku-4-5"
 }

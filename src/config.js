@@ -19,12 +19,17 @@ const DEFAULTS = {
   charactersDir: './characters', // folder of character reference images
   useBaseImage: true, // attach the base style image as a reference to EVERY prompt
   baseCharacterDir: './base_character', // folder holding the base style image (+ instruction.txt)
+  backgrounds: true, // attach matching backgrounds/ images as references (like characters)
+  backgroundsDir: './backgrounds', // folder of background/scene reference images
   outputDir: './output',
   timeoutMs: 300000, // max wait per generation (some runs exceed 3 min)
   stepDelayMs: 4000, // base pause between prompts (human-like pacing)
   chromePort: 9222,
   chromePath: '', // auto-detected if empty
   uiPort: 5179, // local web UI (open-ui.bat / src/server.js)
+  aiPlanning: true, // use the Claude Code CLI to plan cast/scenes + per-prompt characters
+  claudeCommand: '', // path to claude.exe; auto-detected if empty
+  claudeModel: 'claude-haiku-4-5', // cheap model for planning
 };
 
 /** Auto-detect the installed Chrome executable on Windows. */
@@ -35,6 +40,26 @@ function detectChrome() {
     process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Google/Chrome/Application/chrome.exe'),
   ].filter(Boolean);
   return candidates.find((p) => fs.existsSync(p)) || '';
+}
+
+/**
+ * Auto-detect the Claude Code CLI on Windows. It installs (but is not added to
+ * PATH) under `%APPDATA%\Claude\claude-code\<version>\claude.exe`; pick the newest
+ * version directory. Returns '' if not found.
+ */
+function detectClaude() {
+  const base = process.env.APPDATA && path.join(process.env.APPDATA, 'Claude', 'claude-code');
+  if (!base || !fs.existsSync(base)) return '';
+  try {
+    const versions = fs
+      .readdirSync(base)
+      .filter((v) => fs.existsSync(path.join(base, v, 'claude.exe')))
+      // sort version dirs descending (newest first), numeric-aware
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    return versions.length ? path.join(base, versions[0], 'claude.exe') : '';
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -62,6 +87,8 @@ function validateConfig(raw = {}) {
   cfg.unlimited = Boolean(cfg.unlimited);
   cfg.references = Boolean(cfg.references);
   cfg.useBaseImage = Boolean(cfg.useBaseImage);
+  cfg.backgrounds = Boolean(cfg.backgrounds);
+  cfg.aiPlanning = Boolean(cfg.aiPlanning);
 
   return cfg;
 }
@@ -97,6 +124,11 @@ function loadConfig() {
     : path.resolve(PROJECT_ROOT, cfg.baseCharacterDir);
   fs.mkdirSync(cfg.baseCharacterDir, { recursive: true });
 
+  cfg.backgroundsDir = path.isAbsolute(cfg.backgroundsDir)
+    ? cfg.backgroundsDir
+    : path.resolve(PROJECT_ROOT, cfg.backgroundsDir);
+  fs.mkdirSync(cfg.backgroundsDir, { recursive: true });
+
   // Dedicated Chrome profile for this tool (keeps the login; separate from the
   // user's everyday Chrome to avoid conflicts).
   cfg.chromeProfileDir = path.join(PROJECT_ROOT, 'chrome-profile');
@@ -108,6 +140,10 @@ function loadConfig() {
       'Could not find Google Chrome. Install it, or set "chromePath" in config.json.'
     );
   }
+
+  // Claude Code CLI for AI planning (optional — planning degrades gracefully if
+  // it can't be found). Auto-detect when not explicitly set.
+  if (!cfg.claudeCommand) cfg.claudeCommand = detectClaude();
 
   return cfg;
 }
@@ -272,19 +308,34 @@ function readDescription(imageFile) {
  * Returns [{ keyword, file, terms, description }] (absolute `file` paths). Empty
  * if the folder has no images.
  */
-function loadCharacters(charactersDir) {
-  if (!charactersDir || !fs.existsSync(charactersDir)) return [];
+function loadRefFolder(dir) {
+  if (!dir || !fs.existsSync(dir)) return [];
   const IMG_RE = /\.(png|jpe?g|webp|gif)$/i;
   return fs
-    .readdirSync(charactersDir)
+    .readdirSync(dir)
     .filter((name) => IMG_RE.test(name))
     .map((name) => {
       const keyword = name.replace(IMG_RE, '').replace(/[_-]+/g, ' ').trim().toLowerCase();
-      const file = path.join(charactersDir, name);
+      const file = path.join(dir, name);
       const description = readDescription(file);
       return { keyword, file, description, terms: buildTerms(keyword, description) };
     })
     .filter((c) => c.keyword);
+}
+
+function loadCharacters(charactersDir) {
+  return loadRefFolder(charactersDir);
+}
+
+/**
+ * Read the backgrounds/ folder. Same convention as characters: each image's
+ * filename (and an optional sibling `<base>.txt` alias file) defines the keywords
+ * that, when they appear in a prompt, attach that background as a reference (e.g.
+ * `sunset.png` + alias "orange, fire, ancient"). Returns the same shape as
+ * loadCharacters.
+ */
+function loadBackgrounds(backgroundsDir) {
+  return loadRefFolder(backgroundsDir);
 }
 
 /**
@@ -332,7 +383,9 @@ module.exports = {
   loadStyle,
   loadSafety,
   loadCharacters,
+  loadBackgrounds,
   loadBaseCharacter,
+  detectClaude,
   DEFAULT_BASE_INSTRUCTION,
   DEFAULT_SAFETY_PREAMBLE,
   DEFAULTS,

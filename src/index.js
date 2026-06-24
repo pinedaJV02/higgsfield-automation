@@ -8,12 +8,14 @@ const {
   loadStyle,
   loadSafety,
   loadCharacters,
+  loadBackgrounds,
   loadBaseCharacter,
   DEFAULT_BASE_INSTRUCTION,
 } = require('./config');
 const { launchAndConnect } = require('./browser');
 const { Higgsfield, CaptchaError, ModerationError, stampOf } = require('./higgsfield');
 const { sanitize, imageInfo } = require('./download');
+const { extractReferences, resolveReferences, selectCharacters, matchByTerms, runPlan } = require('./planner');
 
 /** Timestamp in hhmmddMM (hour, minute, day, month). */
 function stamp() {
@@ -33,34 +35,6 @@ function slug(s) {
 
 /** The `{noref}` token disables reference attachment for a prompt. */
 const NOREF_RE = /\{\s*noref\s*\}/i;
-
-/**
- * Whether a term/phrase occurs as a whole word/phrase in the normalized prompt
- * (which is space-padded), with simple plural/singular tolerance so e.g. "dog"
- * matches "dogs" and "boxes" matches "box".
- */
-function termInText(norm, term) {
-  if (!term) return false;
-  if (norm.includes(' ' + term + ' ')) return true;
-  if (norm.includes(' ' + term + 's ')) return true; // dog → dogs
-  if (term.endsWith('es') && norm.includes(' ' + term.slice(0, -2) + ' ')) return true; // boxes → box
-  if (term.endsWith('s') && norm.includes(' ' + term.slice(0, -1) + ' ')) return true; // dogs → dog
-  return false;
-}
-
-/**
- * Choose which characters belong in a prompt automatically: a character matches
- * if ANY of its match terms (filename keyword + `dog1`→"dog" + alias-file terms;
- * see loadCharacters) appears in the prompt as a whole word/phrase. Returns the
- * matching character objects.
- */
-function matchCharacters(text, characters) {
-  const norm = ' ' + text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ') + ' ';
-  return characters.filter((c) => {
-    const terms = c.terms && c.terms.length ? c.terms : [c.keyword];
-    return terms.some((t) => termInText(norm, t));
-  });
-}
 
 /** Wait until logged in (prompt box visible), prompting the user if needed. */
 async function ensureLoggedIn(hf, page) {
@@ -85,6 +59,7 @@ async function main() {
   const style = loadStyle();
   const safetyPreamble = loadSafety();
   const characters = cfg.references ? loadCharacters(cfg.charactersDir) : [];
+  const backgrounds = cfg.backgrounds ? loadBackgrounds(cfg.backgroundsDir) : [];
   const base = cfg.useBaseImage ? loadBaseCharacter(cfg.baseCharacterDir) : null;
   if (prompts.length === 0) {
     console.log('No prompts found in prompts.txt. Add one prompt per line.');
@@ -100,16 +75,33 @@ async function main() {
   } else if (cfg.references) {
     console.log(`  characters: (none in ${cfg.charactersDir})`);
   }
+  if (backgrounds.length) {
+    console.log(`  backgrounds: ${backgrounds.map((c) => c.keyword).join(', ')}`);
+  } else if (cfg.backgrounds) {
+    console.log(`  backgrounds: (none in ${cfg.backgroundsDir})`);
+  }
   if (cfg.useBaseImage) {
     if (base && base.file) {
       const custom = base.instruction !== DEFAULT_BASE_INSTRUCTION;
-      console.log(`  base image: ${path.basename(base.file)} (attached to every prompt)`);
+      console.log(`  base image: ${path.basename(base.file)} (fallback when a prompt has no character)`);
       console.log(`  base instruction: ${custom ? 'custom (instruction.txt)' : 'default'}`);
     } else {
       console.log(`  ⚠ base image: ENABLED but none found in ${cfg.baseCharacterDir}`);
     }
   }
   console.log(`  output: ${cfg.outputDir}\n`);
+
+  // AI planning (optional): one Claude CLI call → plan.md/plan.json with the cast,
+  // 5-6 background scenes, and a per-prompt character suggestion. Degrades to
+  // heuristics on any failure. The master prompt's [reference:] tags still win.
+  let plan = null;
+  if (cfg.aiPlanning) {
+    console.log('  • AI planning via Claude CLI…');
+    plan = await runPlan(cfg, prompts, characters);
+    if (plan && Array.isArray(plan.missing) && plan.missing.length) {
+      console.log(`  • characters to add to characters/: ${plan.missing.join(', ')}`);
+    }
+  }
 
   const { browser, page } = await launchAndConnect(cfg);
   const hf = new Higgsfield(page, cfg);
@@ -137,7 +129,9 @@ async function main() {
       const { timestamp } = prompts[i];
       const n = String(i + 1).padStart(2, '0');
       const noref = NOREF_RE.test(prompts[i].text);
-      const prompt = prompts[i].text.replace(NOREF_RE, '').replace(/\s+/g, ' ').trim();
+      // Pull [reference:]/[main character] tags out (they name which images to
+      // attach) and strip them + {noref} from the text that gets typed.
+      const { clean: prompt, refs } = extractReferences(prompts[i].text.replace(NOREF_RE, ''));
       const label = timestamp || `#${n}`;
       const baseName = timestamp ? timestamp.replace(/:/g, '_') : `${n}_${slug(prompt)}_${stamp()}`;
       const rec = { label, prompt, baseName, status: 'pending', file: '', stamp: '', prevStamp: '' };
@@ -158,21 +152,58 @@ async function main() {
           }
         }
 
-        // Build references: the base style image first (attached to EVERY prompt
-        // unless {noref}), then any matched character refs (lock-first-generation).
-        // The base is never locked and never keyword-matched. De-duped at the end.
-        const baseAttached = !!(base && base.file && !noref);
+        // Decide which character references to attach, in priority order:
+        //   1. [reference:]/[main character] tags from the master prompt → exact
+        //      on-disk character files (authoritative).
+        //   2. otherwise the AI planner's per-prompt suggestion (if any), then a
+        //      name/alias + role-cue heuristic (selectCharacters).
+        // The base style image is attached ONLY as a fallback — when the prompt
+        // resolves to NO character at all (so the base guy disappears the moment a
+        // real character is present). {noref} skips everything.
+        let selected = [];
         let refPaths = [];
-        if (baseAttached) refPaths.push(base.file);
-        if (cfg.references && !noref && characters.length) {
-          const matched = matchCharacters(prompt, characters);
-          rec.matched = matched.map((c) => c.keyword);
-          refPaths.push(...matched.map((c) => locked[c.keyword] || c.file));
-          if (matched.length) {
-            console.log(`  • references: ${matched.map((c) => c.keyword).join(', ')}`);
+        if (!noref) {
+          if (refs.length) {
+            const { matched, missing } = resolveReferences(refs, characters);
+            selected = matched;
+            refPaths = matched.map((c) => c.file); // exact reference, not a locked frame
+            if (missing.length) {
+              console.log(`  ⚠ referenced but missing from characters/: ${missing.join(', ')} — add them`);
+            }
+          } else if (cfg.references && characters.length) {
+            const planForPrompt = plan && Array.isArray(plan.perPrompt)
+              ? plan.perPrompt.find((p) => p.i === i)
+              : null;
+            selected = selectCharacters(prompt, characters, planForPrompt);
+            refPaths = selected.map((c) => locked[c.keyword] || c.file);
           }
         }
+        rec.matched = selected.map((c) => c.keyword);
+
+        // Background reference: matched by keyword/alias against the prompt, just
+        // like characters (e.g. "sunset" → backgrounds/sunset.png). Attach at most
+        // one so two backgrounds never fight. Independent of the character choice.
+        let bg = [];
+        if (!noref && cfg.backgrounds && backgrounds.length) {
+          bg = matchByTerms(prompt, backgrounds).slice(0, 1);
+          if (bg.length) refPaths.push(bg[0].file);
+        }
+
+        // The base style image is the last-resort fallback: only when the prompt
+        // resolves to NO character AND no background reference.
+        const baseAttached = !!(base && base.file && !noref && selected.length === 0 && bg.length === 0);
+        if (baseAttached) refPaths.unshift(base.file);
         refPaths = [...new Set(refPaths)];
+
+        if (selected.length) {
+          console.log(`  • characters: ${selected.map((c) => c.keyword).join(', ')}`);
+        }
+        if (bg.length) {
+          console.log(`  • background: ${bg[0].keyword}`);
+        }
+        if (!selected.length && !bg.length && baseAttached) {
+          console.log('  • base style image (no specific character/background)');
+        }
         await hf.clearReferences();
         await hf.attachReferences(refPaths);
 
