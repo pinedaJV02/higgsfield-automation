@@ -91,18 +91,6 @@ async function main() {
   }
   console.log(`  output: ${cfg.outputDir}\n`);
 
-  // AI planning (optional): one Claude CLI call → plan.md/plan.json with the cast,
-  // 5-6 background scenes, and a per-prompt character suggestion. Degrades to
-  // heuristics on any failure. The master prompt's [reference:] tags still win.
-  let plan = null;
-  if (cfg.aiPlanning) {
-    console.log('  • AI planning via Claude CLI…');
-    plan = await runPlan(cfg, prompts, characters);
-    if (plan && Array.isArray(plan.missing) && plan.missing.length) {
-      console.log(`  • characters to add to characters/: ${plan.missing.join(', ')}`);
-    }
-  }
-
   const { browser, page } = await launchAndConnect(cfg);
   const hf = new Higgsfield(page, cfg);
 
@@ -111,11 +99,25 @@ async function main() {
   const locked = {};
   const results = []; // { label, prompt, baseName, status, file, stamp, prevStamp }
   let stoppedEarly = false;
+  let plan = null;
 
   try {
     await hf.openImageGenerator(cfg.model);
     await ensureLoggedIn(hf, page);
     await hf.dismissCookies();
+
+    // AI planning (optional): one Claude CLI call → plan.md/plan.json with the cast,
+    // 5-6 background scenes, and a per-prompt character suggestion. Runs AFTER login
+    // so the Chrome window opens first and you can sign in immediately; it never
+    // blocks the login step. Degrades to heuristics on any failure; the master
+    // prompt's [reference:] tags still win.
+    if (cfg.aiPlanning) {
+      console.log('  • AI planning via Claude CLI…');
+      plan = await runPlan(cfg, prompts, characters);
+      if (plan && Array.isArray(plan.missing) && plan.missing.length) {
+        console.log(`  • characters to add to characters/: ${plan.missing.join(', ')}`);
+      }
+    }
 
     // Switch to the configured model + verify (Unlimited required only when ON).
     await hf.selectModel();
