@@ -1,0 +1,89 @@
+{
+  "cast": [
+    {
+      "name": "Main_character.PNG",
+      "role": "Narrator",
+      "description": "The main character who explains the domestication story and guides the viewer through the video",
+      "existing": true
+    },
+    {
+      "name": "Fanged_guy.PNG",
+      "role": "Wild Wolf",
+      "description": "Represents the wild wolf ancestor before domestication, appears in prehistoric flashback scenes",
+      "existing": true
+    },
+    {
+      "name": "Rescue_Dog_dog.png",
+      "role": "Domesticated Dog",
+      "description": "Represents the modern domesticated dog, shown in rescue/modern and natural bonding scenarios",
+      "existing": true
+    }
+  ],
+  "missing": [],
+  "scenes": [
+    {
+      "name": "White Void",
+      "description": "Plain white background for talking heads and explanatory scenes with the narrator"
+    },
+    {
+      "name": "Rubble/Disaster",
+      "description": "Stark pale grey with chunky broken concrete blocks for earthquake wreckage and rescue scenarios"
+    },
+    {
+      "name": "Ancient/Evolutionary",
+      "description": "Solid tan background for prehistoric settings, early human campfire scenes, and evolutionary history"
+    },
+    {
+      "name": "Outdoor/Night Fire",
+      "description": "Solid orange background for the original wolf-meets-human moment by firelight"
+    },
+    {
+      "name": "Science/Biology",
+      "description": "Solid blue background for scent anatomy, brain diagrams, and oxytocin/hormonal explanation scenes"
+    },
+    {
+      "name": "Outdoor/Daylight",
+      "description": "Flat green ground with blue sky for animal behavior, nature scenes, and modern dog-human bonding"
+    }
+  ],
+  "perPrompt": [
+    {
+      "i": 0,
+      "characters": [
+        "Main_character.PNG"
+      ]
+    },
+    {
+      "i": 1,
+      "characters": [
+        "Rescue_Dog_dog.png"
+      ]
+    },
+    {
+      "i": 2,
+      "characters": [
+        "Fanged_guy.PNG"
+      ]
+    },
+    {
+      "i": 3,
+      "characters": [
+        "Fanged_guy.PNG",
+        "Main_character.PNG"
+      ]
+    },
+    {
+      "i": 4,
+      "characters": [
+        "Main_character.PNG"
+      ]
+    },
+    {
+      "i": 5,
+      "characters": [
+        "Rescue_Dog_dog.png",
+        "Main_character.PNG"
+      ]
+    }
+  ]
+}
