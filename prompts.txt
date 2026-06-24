@@ -1,6 +1,6 @@
-# One prompt per line. Blank lines and lines starting with # are ignored.
-# Edit this file, then run run-batch.bat.
-
-a ballerina holding a sword
-john wick eating spaghetti
-a dog searching through a rubble building
+White void — plain white — default talking/explanatory/narrator scenes (main character or abstract concepts)
+Rubble/disaster — stark pale grey with chunky broken concrete blocks — earthquake wreckage, search scenes
+Ancient/evolutionary — solid tan — prehistoric wolf/early human campfire scenes, evolutionary history
+Outdoor/night fire — solid orange — fire scenes, the original wolf-meets-human moment
+Science/biology — solid blue — scent anatomy, brain diagrams, oxytocin/hormonal scenes
+Outdoor/daylight — flat green ground + blue sky — animal behaviour, wolf pack, nature scenes

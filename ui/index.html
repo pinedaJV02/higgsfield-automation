@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Higgsfield Batch — Control Panel</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #171b22;
+    --panel-2: #1e232c;
+    --border: #2a313c;
+    --text: #e6e9ee;
+    --muted: #8a93a3;
+    --accent: #5b8cff;
+    --accent-2: #3f6fe0;
+    --green: #36c46b;
+    --red: #ff5c6c;
+    --yellow: #f3c14a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 16px 24px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: baseline; gap: 12px; background: var(--panel);
+  }
+  header h1 { font-size: 18px; margin: 0; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  nav {
+    display: flex; gap: 4px; padding: 8px 24px 0; background: var(--panel);
+    border-bottom: 1px solid var(--border); flex-wrap: wrap;
+  }
+  nav button {
+    background: none; border: none; color: var(--muted); padding: 10px 16px;
+    cursor: pointer; font-size: 14px; border-bottom: 2px solid transparent;
+  }
+  nav button.active { color: var(--text); border-bottom-color: var(--accent); }
+  main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+  section { display: none; }
+  section.active { display: block; }
+  h2 { font-size: 16px; margin: 0 0 4px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+  .field {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .field label { display: block; font-weight: 600; margin-bottom: 2px; }
+  .field .desc { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+  .field input[type=text], .field input[type=number], textarea {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; padding: 8px 10px; font: inherit;
+  }
+  .field input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+
+  .toggle { display: flex; align-items: center; gap: 10px; }
+  .switch { position: relative; width: 44px; height: 24px; flex: 0 0 auto; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute; inset: 0; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 999px; transition: .15s; cursor: pointer;
+  }
+  .slider::before {
+    content: ""; position: absolute; height: 18px; width: 18px; left: 2px; top: 2px;
+    background: var(--muted); border-radius: 50%; transition: .15s;
+  }
+  .switch input:checked + .slider { background: var(--accent-2); border-color: var(--accent); }
+  .switch input:checked + .slider::before { transform: translateX(20px); background: #fff; }
+
+  button.btn {
+    background: var(--accent-2); color: #fff; border: none; border-radius: 8px;
+    padding: 9px 18px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.btn:hover { background: var(--accent); }
+  button.btn.secondary { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); }
+  button.btn.danger { background: var(--red); }
+  button.btn:disabled { opacity: .5; cursor: not-allowed; }
+  .row { display: flex; gap: 10px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+
+  .toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 18px; border-radius: 8px; opacity: 0; transition: opacity .2s;
+    pointer-events: none; z-index: 50;
+  }
+  .toast.show { opacity: 1; }
+  .toast.ok { border-color: var(--green); }
+  .toast.err { border-color: var(--red); }
+
+  textarea#promptsText { min-height: 60vh; height: 60vh; resize: vertical; line-height: 1.6; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+  .badge { background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted); }
+
+  .charGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-top: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; position: relative; }
+  .card img { width: 100%; height: 120px; object-fit: cover; display: block; background: #000; }
+  .card .meta { padding: 6px 8px; font-size: 12px; }
+  .card .kw { font-weight: 600; }
+  .card .dim { color: var(--muted); }
+  .card .del {
+    position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,.6); color: #fff;
+    border: none; border-radius: 50%; width: 24px; height: 24px; cursor: pointer; font-size: 14px;
+  }
+  .card .del:hover { background: var(--red); }
+  .card .alias {
+    width: 100%; margin-top: 6px; background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 6px; padding: 5px 7px; font: inherit; font-size: 12px;
+  }
+  .card .alias:focus { outline: none; border-color: var(--accent); }
+
+  .dropzone {
+    border: 2px dashed var(--border); border-radius: 12px; padding: 28px; text-align: center;
+    color: var(--muted); cursor: pointer; transition: .15s;
+  }
+  .dropzone.drag { border-color: var(--accent); color: var(--text); background: var(--panel); }
+
+  #log {
+    background: #0a0c10; border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px; height: 420px; overflow: auto; white-space: pre-wrap;
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px; margin-top: 14px;
+  }
+  #log .err { color: var(--red); }
+  #log .exit { color: var(--yellow); }
+  .status-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+  .status-dot.live { background: var(--green); box-shadow: 0 0 8px var(--green); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Higgsfield Batch</h1>
+  <span class="sub">local control panel</span>
+</header>
+<nav>
+  <button data-tab="config" class="active">Config</button>
+  <button data-tab="prompts">Prompts</button>
+  <button data-tab="characters">Characters</button>
+  <button data-tab="backgrounds">Backgrounds</button>
+  <button data-tab="base">Base style</button>
+  <button data-tab="run">Run</button>
+  <button data-tab="output">Output</button>
+</nav>
+<main>
+  <!-- CONFIG -->
+  <section id="config" class="active">
+    <h2>Settings</h2>
+    <p class="hint">These map to <code>config.json</code>. Changes are saved only when you click <b>Save</b>.</p>
+    <div id="configFields" class="grid"></div>
+    <div class="row">
+      <button class="btn" id="saveConfig">Save config</button>
+      <button class="btn secondary" id="reloadConfig">Reload</button>
+    </div>
+  </section>
+
+  <!-- PROMPTS -->
+  <section id="prompts">
+    <h2>Prompts <span class="badge" id="promptCount">0 prompts</span></h2>
+    <p class="hint">Paste a timestamped <code>[MM:SS]</code> script as-is, or one prompt per line. Lines starting with <code>#</code> are comments.</p>
+    <textarea id="promptsText" spellcheck="false"></textarea>
+    <div class="row">
+      <button class="btn" id="savePrompts">Save prompts</button>
+      <button class="btn secondary" id="reloadPrompts">Reload</button>
+    </div>
+  </section>
+
+  <!-- CHARACTERS -->
+  <section id="characters">
+    <h2>Character references</h2>
+    <p class="hint">A prompt automatically pulls in any character whose <b>name</b> or <b>aliases</b> appear in it (e.g. <code>Dog1.png</code> matches "dog"). Add comma-separated <b>aliases</b> under each image to control matching (e.g. <code>dog, puppy, brown dog</code>). The first generated image of a character is then locked and reused for consistency.</p>
+    <div class="dropzone" id="dropzone">Drag images here, or click to choose files</div>
+    <input type="file" id="fileInput" accept=".png,.jpg,.jpeg,.webp,.gif" multiple hidden />
+    <div class="charGrid" id="charGrid"></div>
+  </section>
+
+  <!-- BACKGROUNDS -->
+  <section id="backgrounds">
+    <h2>Background references</h2>
+    <p class="hint">Works exactly like characters: a prompt pulls in any background whose name or aliases appear in it (e.g. <code>sunset.png</code> + aliases <code>orange, fire, ancient</code> matches a fiery/ancient scene). At most one background is attached per prompt. When a prompt matches no character and no background, the base style image is used instead.</p>
+    <div class="dropzone" id="bgDropzone">Drag images here, or click to choose files</div>
+    <input type="file" id="bgFileInput" accept=".png,.jpg,.jpeg,.webp,.gif" multiple hidden />
+    <div class="charGrid" id="bgGrid"></div>
+  </section>
+
+  <!-- BASE STYLE -->
+  <section id="base">
+    <h2>Base style image</h2>
+    <p class="hint">This image is attached as a reference to <b>every</b> prompt (a global style anchor), and the instruction below is appended to each prompt's text. Use it to keep one consistent art style and to derive any new character from the base figure. Add <code>{noref}</code> to a prompt to skip it for that prompt. Toggle the whole feature with <b>Use base image</b> on the Config tab.</p>
+    <div class="grid">
+      <div class="field">
+        <label>Current base image</label>
+        <div class="desc">Uploading a new image <b>replaces</b> the current one.</div>
+        <img id="basePreview" alt="base" style="width:100%;max-height:240px;object-fit:contain;background:#000;border-radius:8px;display:none" />
+        <p class="hint" id="baseNone" style="margin:8px 0 0">No base image yet.</p>
+        <div class="dropzone" id="baseDrop" style="margin-top:10px">Drag an image here, or click to choose a file</div>
+        <input type="file" id="baseFile" accept=".png,.jpg,.jpeg,.webp,.gif" hidden />
+      </div>
+      <div class="field">
+        <label>Instruction</label>
+        <div class="desc">Appended to every prompt (only when a base image is attached). Leave blank to use the built-in default.</div>
+        <textarea id="baseInstruction" style="min-height:160px"></textarea>
+        <div class="row">
+          <button class="btn" id="saveBaseInstruction">Save instruction</button>
+          <button class="btn secondary" id="resetBaseInstruction">Reset to default</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- RUN -->
+  <section id="run">
+    <h2><span class="status-dot" id="statusDot"></span>Run batch</h2>
+    <p class="hint">Launches <code>node src/index.js</code> — the same as <code>run-batch.bat</code>. On the first run, log in to Higgsfield in the Chrome window that opens.</p>
+    <div class="row">
+      <button class="btn" id="runBtn">Run batch</button>
+      <button class="btn danger" id="stopBtn" disabled>Stop</button>
+      <button class="btn secondary" id="clearLog">Clear log</button>
+    </div>
+    <div id="log"></div>
+
+    <h2 style="margin-top:28px">Plan with Claude</h2>
+    <p class="hint">Optional. Uses the Claude Code CLI to draft the cast, 5-6 background scenes, and a per-prompt character list into <code>plan.md</code>. Turn it on/off with <code>aiPlanning</code> on the Config tab.</p>
+    <div class="row">
+      <button class="btn secondary" id="planBtn">Generate plan (Claude)</button>
+      <button class="btn secondary" id="reloadPlan">Reload plan</button>
+    </div>
+    <pre id="planView" style="background:#0a0c10;border:1px solid var(--border);border-radius:10px;padding:12px;max-height:320px;overflow:auto;white-space:pre-wrap;margin-top:12px;font-size:12.5px"></pre>
+  </section>
+
+  <!-- OUTPUT -->
+  <section id="output">
+    <h2>Output gallery</h2>
+    <p class="hint">Generated images from your <code>output/</code> folder. A red border flags an image that looks too small/invalid.</p>
+    <div class="row">
+      <button class="btn secondary" id="reloadOutput">Refresh</button>
+    </div>
+    <div class="charGrid" id="outputGrid"></div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const api = (p, opts) => fetch(p, opts).then(async (r) => {
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+});
+function toast(msg, kind) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + (kind || '');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => (t.className = 'toast'), 2600);
+}
+
+// --- tabs ---
+document.querySelectorAll('nav button').forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll('nav button').forEach((x) => x.classList.remove('active'));
+    document.querySelectorAll('section').forEach((x) => x.classList.remove('active'));
+    b.classList.add('active');
+    $('#' + b.dataset.tab).classList.add('active');
+    if (b.dataset.tab === 'output') loadOutput();
+    if (b.dataset.tab === 'characters') loadCharacters();
+    if (b.dataset.tab === 'backgrounds') loadBackgrounds();
+    if (b.dataset.tab === 'base') loadBase();
+    if (b.dataset.tab === 'run') loadPlan();
+  };
+});
+
+// --- config ---
+const FIELD_META = {
+  model: { label: 'Model id', desc: 'Higgsfield model id (URL ?model=).' },
+  modelLabel: { label: 'Model label', desc: 'Exact picker text; auto-derived if blank.' },
+  ratio: { label: 'Aspect ratio', desc: 'e.g. 16:9, 1:1, 9:16.' },
+  quality: { label: 'Quality', desc: 'Quality label, e.g. 2K.' },
+  unlimited: { label: 'Unlimited (credit guard)', desc: 'ON = never spend a credit. OFF = spend credits.' },
+  references: { label: 'Use character references', desc: 'Attach matching characters/ images to prompts.' },
+  charactersDir: { label: 'Characters folder', desc: 'Path to reference images.' },
+  useBaseImage: { label: 'Use base image', desc: 'Attach the base style image + instruction to every prompt (see Base style tab).' },
+  baseCharacterDir: { label: 'Base image folder', desc: 'Folder holding the base style image.' },
+  backgrounds: { label: 'Use backgrounds', desc: 'Attach a matching backgrounds/ image per prompt (see Backgrounds tab).' },
+  backgroundsDir: { label: 'Backgrounds folder', desc: 'Folder of background/scene reference images.' },
+  outputDir: { label: 'Output folder', desc: 'Where images are saved.' },
+  timeoutMs: { label: 'Timeout per image (ms)', desc: 'Max wait per generation.' },
+  stepDelayMs: { label: 'Delay between prompts (ms)', desc: 'Human-like pacing.' },
+  chromePort: { label: 'Chrome debug port', desc: 'Remote-debugging port.' },
+  chromePath: { label: 'Chrome path', desc: 'Auto-detected if blank.' },
+  uiPort: { label: 'UI port', desc: 'This control panel (restart to apply).' },
+};
+let DEFAULTS = {};
+
+function renderConfig(cfg, defaults) {
+  DEFAULTS = defaults;
+  const box = $('#configFields');
+  box.innerHTML = '';
+  for (const key of Object.keys(defaults)) {
+    const meta = FIELD_META[key] || { label: key, desc: '' };
+    const val = cfg[key];
+    const div = document.createElement('div');
+    div.className = 'field';
+    if (typeof defaults[key] === 'boolean') {
+      div.innerHTML = `<div class="toggle">
+        <label class="switch"><input type="checkbox" data-key="${key}" ${val ? 'checked' : ''}/><span class="slider"></span></label>
+        <div><label style="margin:0">${meta.label}</label><div class="desc">${meta.desc}</div></div></div>`;
+    } else {
+      const type = typeof defaults[key] === 'number' ? 'number' : 'text';
+      div.innerHTML = `<label>${meta.label}</label><div class="desc">${meta.desc}</div>
+        <input type="${type}" data-key="${key}" value="${val ?? ''}" />`;
+    }
+    box.appendChild(div);
+  }
+}
+function collectConfig() {
+  const out = {};
+  document.querySelectorAll('#configFields [data-key]').forEach((el) => {
+    const key = el.dataset.key;
+    if (el.type === 'checkbox') out[key] = el.checked;
+    else if (typeof DEFAULTS[key] === 'number') out[key] = Number(el.value);
+    else out[key] = el.value;
+  });
+  return out;
+}
+async function loadConfig() {
+  const { config, defaults } = await api('/api/config');
+  renderConfig(config, defaults);
+}
+$('#saveConfig').onclick = async () => {
+  try {
+    await api('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(collectConfig()) });
+    toast('Config saved', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+};
+$('#reloadConfig').onclick = () => loadConfig().then(() => toast('Reloaded'));
+
+// --- prompts ---
+async function loadPrompts() {
+  const { text, count } = await api('/api/prompts');
+  $('#promptsText').value = text;
+  $('#promptCount').textContent = count + (count === 1 ? ' prompt' : ' prompts');
+}
+$('#savePrompts').onclick = async () => {
+  try {
+    const { count } = await api('/api/prompts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: $('#promptsText').value }) });
+    $('#promptCount').textContent = count + (count === 1 ? ' prompt' : ' prompts');
+    toast('Prompts saved', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+};
+$('#reloadPrompts').onclick = () => loadPrompts().then(() => toast('Reloaded'));
+
+// --- characters ---
+async function loadCharacters() {
+  const { characters } = await api('/api/characters');
+  const grid = $('#charGrid');
+  grid.innerHTML = '';
+  if (!characters.length) { grid.innerHTML = '<p class="hint">No character images yet.</p>'; return; }
+  for (const c of characters) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const esc = (s) => String(s).replace(/"/g, '&quot;');
+    card.innerHTML = `<img src="${c.url}" alt="${c.name}"/>
+      <button class="del" title="Delete">×</button>
+      <div class="meta"><div class="kw">${c.keyword}</div><div class="dim">${c.name}</div>
+        <input class="alias" type="text" placeholder="aliases: dog, puppy…" value="${esc(c.description || '')}" />
+      </div>`;
+    card.querySelector('.del').onclick = async () => {
+      try { await api('/api/characters?name=' + encodeURIComponent(c.name), { method: 'DELETE' }); loadCharacters(); toast('Deleted', 'ok'); }
+      catch (e) { toast(e.message, 'err'); }
+    };
+    const alias = card.querySelector('.alias');
+    const saveAlias = async () => {
+      if (alias.value === (c.description || '')) return; // unchanged
+      try {
+        await api('/api/characters/description', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: c.name, text: alias.value }) });
+        c.description = alias.value;
+        toast('Aliases saved for ' + c.keyword, 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    alias.onblur = saveAlias;
+    alias.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); alias.blur(); } };
+    grid.appendChild(card);
+  }
+}
+function uploadFiles(files) {
+  [...files].forEach((file) => {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        await api('/api/characters', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: file.name, dataBase64: reader.result }) });
+        loadCharacters();
+        toast('Uploaded ' + file.name, 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    reader.readAsDataURL(file);
+  });
+}
+$('#dropzone').onclick = () => $('#fileInput').click();
+$('#fileInput').onchange = (e) => uploadFiles(e.target.files);
+const dz = $('#dropzone');
+['dragover', 'dragenter'].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add('drag'); }));
+['dragleave', 'drop'].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove('drag'); }));
+dz.addEventListener('drop', (e) => uploadFiles(e.dataTransfer.files));
+
+// --- backgrounds (mirror of characters) ---
+async function loadBackgrounds() {
+  const { backgrounds } = await api('/api/backgrounds');
+  const grid = $('#bgGrid');
+  grid.innerHTML = '';
+  if (!backgrounds.length) { grid.innerHTML = '<p class="hint">No background images yet.</p>'; return; }
+  for (const c of backgrounds) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const esc = (s) => String(s).replace(/"/g, '&quot;');
+    card.innerHTML = `<img src="${c.url}" alt="${c.name}"/>
+      <button class="del" title="Delete">×</button>
+      <div class="meta"><div class="kw">${c.keyword}</div><div class="dim">${c.name}</div>
+        <input class="alias" type="text" placeholder="aliases: sunset, orange, fire…" value="${esc(c.description || '')}" />
+      </div>`;
+    card.querySelector('.del').onclick = async () => {
+      try { await api('/api/backgrounds?name=' + encodeURIComponent(c.name), { method: 'DELETE' }); loadBackgrounds(); toast('Deleted', 'ok'); }
+      catch (e) { toast(e.message, 'err'); }
+    };
+    const alias = card.querySelector('.alias');
+    const saveAlias = async () => {
+      if (alias.value === (c.description || '')) return;
+      try {
+        await api('/api/backgrounds/description', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: c.name, text: alias.value }) });
+        c.description = alias.value;
+        toast('Aliases saved for ' + c.keyword, 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    alias.onblur = saveAlias;
+    alias.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); alias.blur(); } };
+    grid.appendChild(card);
+  }
+}
+function uploadBackgrounds(files) {
+  [...files].forEach((file) => {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        await api('/api/backgrounds', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: file.name, dataBase64: reader.result }) });
+        loadBackgrounds();
+        toast('Uploaded ' + file.name, 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    reader.readAsDataURL(file);
+  });
+}
+$('#bgDropzone').onclick = () => $('#bgFileInput').click();
+$('#bgFileInput').onchange = (e) => uploadBackgrounds(e.target.files);
+const bdz = $('#bgDropzone');
+['dragover', 'dragenter'].forEach((ev) => bdz.addEventListener(ev, (e) => { e.preventDefault(); bdz.classList.add('drag'); }));
+['dragleave', 'drop'].forEach((ev) => bdz.addEventListener(ev, (e) => { e.preventDefault(); bdz.classList.remove('drag'); }));
+bdz.addEventListener('drop', (e) => uploadBackgrounds(e.dataTransfer.files));
+
+// --- base style image ---
+let baseDefaultInstruction = '';
+async function loadBase() {
+  const b = await api('/api/base');
+  baseDefaultInstruction = b.defaultInstruction || '';
+  const img = $('#basePreview');
+  if (b.hasImage) {
+    img.src = b.url + '?t=' + Date.now(); // cache-bust after a replace
+    img.style.display = 'block';
+    $('#baseNone').style.display = 'none';
+  } else {
+    img.style.display = 'none';
+    $('#baseNone').style.display = 'block';
+  }
+  $('#baseInstruction').value = b.instruction || '';
+}
+function uploadBase(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      await api('/api/base/image', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: file.name, dataBase64: reader.result }) });
+      await loadBase();
+      toast('Base image replaced', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  reader.readAsDataURL(file);
+}
+$('#baseDrop').onclick = () => $('#baseFile').click();
+$('#baseFile').onchange = (e) => uploadBase(e.target.files[0]);
+(() => {
+  const bz = $('#baseDrop');
+  ['dragover', 'dragenter'].forEach((ev) => bz.addEventListener(ev, (e) => { e.preventDefault(); bz.classList.add('drag'); }));
+  ['dragleave', 'drop'].forEach((ev) => bz.addEventListener(ev, (e) => { e.preventDefault(); bz.classList.remove('drag'); }));
+  bz.addEventListener('drop', (e) => uploadBase(e.dataTransfer.files[0]));
+})();
+$('#saveBaseInstruction').onclick = async () => {
+  try {
+    await api('/api/base/instruction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: $('#baseInstruction').value }) });
+    await loadBase();
+    toast('Instruction saved', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+};
+$('#resetBaseInstruction').onclick = () => { $('#baseInstruction').value = baseDefaultInstruction; toast('Reset — click Save to apply'); };
+
+// --- run + live log ---
+let evtSource = null;
+function setRunning(running) {
+  $('#runBtn').disabled = running;
+  $('#stopBtn').disabled = !running;
+  $('#statusDot').className = 'status-dot' + (running ? ' live' : '');
+}
+function appendLog(evt) {
+  const log = $('#log');
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  const span = document.createElement('div');
+  if (evt.type === 'exit') { span.className = 'exit'; setRunning(false); loadOutput(); }
+  else if (evt.stream === 'err') span.className = 'err';
+  span.textContent = evt.line;
+  log.appendChild(span);
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+function connectStream() {
+  if (evtSource) evtSource.close();
+  evtSource = new EventSource('/api/run/stream');
+  evtSource.addEventListener('status', (e) => setRunning(JSON.parse(e.data).running));
+  evtSource.addEventListener('log', (e) => appendLog(JSON.parse(e.data)));
+  evtSource.addEventListener('exit', (e) => appendLog(JSON.parse(e.data)));
+}
+$('#runBtn').onclick = async () => {
+  try {
+    $('#log').innerHTML = '';
+    await api('/api/run', { method: 'POST' });
+    setRunning(true);
+    toast('Batch started', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+};
+$('#stopBtn').onclick = async () => {
+  try { await api('/api/run/stop', { method: 'POST' }); toast('Stopping…'); }
+  catch (e) { toast(e.message, 'err'); }
+};
+$('#clearLog').onclick = () => ($('#log').innerHTML = '');
+
+// --- plan (Claude) ---
+async function loadPlan() {
+  try {
+    const { exists, markdown } = await api('/api/plan');
+    $('#planView').textContent = exists ? markdown : 'No plan yet. Click "Generate plan (Claude)".';
+  } catch (e) { $('#planView').textContent = e.message; }
+}
+$('#planBtn').onclick = async () => {
+  const btn = $('#planBtn');
+  btn.disabled = true; btn.textContent = 'Planning… (this can take ~30s)';
+  try {
+    const r = await api('/api/plan', { method: 'POST' });
+    if (r.ok) { toast('Plan written to plan.md', 'ok'); await loadPlan(); }
+    else { toast(r.error || 'Planning failed', 'err'); }
+  } catch (e) { toast(e.message, 'err'); }
+  finally { btn.disabled = false; btn.textContent = 'Generate plan (Claude)'; }
+};
+$('#reloadPlan').onclick = () => loadPlan();
+
+// --- output ---
+async function loadOutput() {
+  const { images } = await api('/api/output');
+  const grid = $('#outputGrid');
+  grid.innerHTML = '';
+  if (!images.length) { grid.innerHTML = '<p class="hint">No output images yet.</p>'; return; }
+  for (const im of images) {
+    const flagged = !im.ok || Math.max(im.width, im.height) < 1000 || im.bytes < 50 * 1024;
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.style.borderColor = flagged ? 'var(--red)' : 'var(--border)';
+    const kb = Math.round(im.bytes / 1024);
+    card.innerHTML = `<a href="${im.url}" target="_blank"><img src="${im.url}" alt="${im.name}"/></a>
+      <div class="meta"><div class="kw">${im.name}</div>
+      <div class="dim">${im.width}×${im.height} · ${kb} KB ${flagged ? '⚠' : '✓'}</div></div>`;
+    grid.appendChild(card);
+  }
+}
+$('#reloadOutput').onclick = () => loadOutput().then(() => toast('Refreshed'));
+
+// --- init ---
+loadConfig();
+loadPrompts();
+loadCharacters();
+loadBackgrounds();
+loadPlan();
+connectStream();
+</script>
+</body>
+</html>

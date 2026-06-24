@@ -4,8 +4,14 @@ node_modules/
 # Generated images
 output/
 
-# Build artifacts
+# Logged-in browser session — SENSITIVE (cookies/login) and huge (~GBs).
+# Never commit this; it would leak your account and exceed GitHub size limits.
+chrome-profile/
+profile/
+
+# Build / test artifacts
 *.zip
+.playwright-mcp/
 
 # OS junk
 Thumbs.db
@@ -13,7 +19,9 @@ Thumbs.db
 
 # Local Claude Code settings
 .claude/settings.local.json
+<<<<<<< Updated upstream
+=======
 
-# NOTE: profile/ (the logged-in browser session) is intentionally NOT ignored,
-# because the user chose to include the saved login in the transferable package.
-# If you ever publish this code, add `profile/` here and never commit it.
+# Chrome profile (saved login session — never commit)
+chrome-profile/
+>>>>>>> Stashed changes
