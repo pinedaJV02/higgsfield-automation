@@ -3,7 +3,7 @@
   "modelLabel": "",
   "ratio": "16:9",
   "quality": "2K",
-  "unlimited": false,
+  "unlimited": true,
   "references": true,
   "charactersDir": "./characters",
   "useBaseImage": true,
