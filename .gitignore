@@ -19,3 +19,9 @@ Thumbs.db
 
 # Local Claude Code settings
 .claude/settings.local.json
+<<<<<<< Updated upstream
+=======
+
+# Chrome profile (saved login session — never commit)
+chrome-profile/
+>>>>>>> Stashed changes
