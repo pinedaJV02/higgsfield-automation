@@ -518,7 +518,7 @@ class Higgsfield {
     }
   }
 
-  /** Type the prompt into the Lexical editor (clears any existing text first). */
+  /** Put the prompt into the Lexical editor (clears any existing text first). */
   async setPrompt(text) {
     await this.dismissCookies();
     const box = await firstVisible(this.page, SEL.promptBox);
@@ -526,17 +526,38 @@ class Higgsfield {
     await this._humanPause(300, 700);
     await box.press('Control+A').catch(() => {});
     await box.press('Delete').catch(() => {});
-    // pressSequentially is the current Playwright API (locator.type is deprecated).
-    // The default action timeout is 30s; long prompts (scene + style + base
-    // instruction) can exceed that at a realistic per-char delay once the Lexical
-    // editor's per-keystroke processing overhead is added — which silently aborts
-    // the type mid-prompt. Scale the timeout with the text length so it never
-    // times out spuriously, and keep a brisk-but-human typing speed.
-    const perChar = 15; // ms between keystrokes (fast human typist)
-    await box.pressSequentially(text, {
-      delay: perChar,
-      timeout: Math.max(60000, text.length * (perChar + 45) + 20000),
-    });
+
+    const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
+    // Insert the whole prompt in ONE editor operation. Typing it character by
+    // character races the Lexical editor's async reconciliation and auto-transforms,
+    // which scrambles long prompts (letters reordered, stray "—" dashes appear).
+    // execCommand('insertText') fires a single beforeinput event that Lexical
+    // applies atomically, so the text lands verbatim.
+    await box
+      .evaluate((el, value) => {
+        el.focus();
+        document.execCommand('insertText', false, value);
+      }, text)
+      .catch(() => {});
+    await this.page.waitForTimeout(250);
+
+    // Verify; if the atomic insert didn't land, fall back to typing at a SAFE
+    // (slower) per-char delay that the editor can keep up with.
+    let current = await box.innerText().catch(() => '');
+    if (norm(current) !== norm(text)) {
+      await box.press('Control+A').catch(() => {});
+      await box.press('Delete').catch(() => {});
+      const perChar = 60; // ms — slow enough to avoid the reconciliation race
+      await box.pressSequentially(text, {
+        delay: perChar,
+        timeout: Math.max(60000, text.length * (perChar + 45) + 20000),
+      });
+      current = await box.innerText().catch(() => '');
+    }
+    if (norm(current) !== norm(text)) {
+      console.log('  ⚠ prompt may not have entered exactly (Lexical editor mismatch)');
+    }
     console.log(`  • prompt: "${text}"`);
   }
 
